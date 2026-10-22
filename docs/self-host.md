@@ -10,6 +10,81 @@ For source development in WSL, keep the checkout and `data` directory in the Lin
 
 Compose bot homes mount only their own subdirectory of the application volume using Docker volume semantics. Docker's internal volume paths are never used as host bind mounts.
 
+## Omarchy desktop unread alerts (optional)
+
+On an Omarchy desktop, the optional Python standard-library helper
+`scripts/notify_unread_omarchy.py` polls the signed-in user's spaces every 30 seconds.
+It alerts for unread **bot direct chats**, even when Rakazo is closed or a different
+chat is open. Existing unread replies are announced on first start. This is an
+account-wide unread reminder, independent of each bot's browser finish-notification
+setting; it does not cover group chats or replace browser/mobile push notifications.
+
+Alerts use `omarchy-notification-send` with critical urgency and no expiry so
+Omarchy keeps them until dismissed. Clicking runs
+`omarchy-launch-or-focus-webapp Rakazo <origin>`. Only bot names are shown, never
+reply text. The helper reads message pages to identify the latest bot reply but
+does not persist their content or call `markRead`; dismissing an alert does not
+mark a chat read. Opening Rakazo may mark the visible chat read normally.
+Desktop notification policy, including Do Not Disturb, still applies.
+
+Requires Python 3, those two Omarchy commands, a running graphical session, and a
+Rakazo account with email/password sign-in. No deployment-owner permission is
+needed; it can only see spaces accessible to that account. Use your final HTTPS
+web origin (HTTP is allowed only on loopback); redirects are refused rather than
+forwarding authentication requests. System HTTP proxy settings are not used.
+
+Create a private directory **outside the checkout**:
+
+```bash
+install -d -m 700 ~/.config/rakazo-unread ~/.local/state/rakazo-unread
+install -m 600 /dev/null ~/.config/rakazo-unread/login.json
+${EDITOR:-nano} ~/.config/rakazo-unread/login.json
+```
+
+Save `{"email":"you@example.com","password":"your-password"}` in that file. Do not
+commit it or put the password in shell arguments. Then, from the checkout:
+
+```bash
+python3 -B scripts/notify_unread_omarchy.py \
+  --url https://rakazo.example.com \
+  --login-file ~/.config/rakazo-unread/login.json \
+  --state-file ~/.local/state/rakazo-unread/state.json --once
+```
+
+Omit `--once` to keep polling. State contains only thread/reply IDs and is replaced
+atomically with mode 0600. Use a separate state file per account/origin. An unchanged
+unread reply is not announced again, including after restart; a later reply is.
+Once a chat is observed read, its state entry is removed. Manually marking it
+unread again can therefore announce its existing latest reply. Failed requests or
+notification commands exit nonzero without acknowledging the failed notification.
+If state cannot be saved after delivery, the next run may repeat the alert.
+
+For login-session startup, adapt this user unit (assumes the checkout is `~/rakazo`):
+
+```ini
+[Unit]
+Description=Rakazo unread bot desktop alerts
+After=graphical-session.target network-online.target
+PartOf=graphical-session.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 -B %h/rakazo/scripts/notify_unread_omarchy.py --url https://rakazo.example.com --login-file %h/.config/rakazo-unread/login.json --state-file %h/.local/state/rakazo-unread/state.json
+UMask=0077
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=graphical-session.target
+```
+
+Save as `~/.config/systemd/user/rakazo-unread.service`, replace the origin and
+checkout path, then run `systemctl --user daemon-reload` and
+`systemctl --user enable --now rakazo-unread.service`. Disable with
+`systemctl --user disable --now rakazo-unread.service`. Nothing is installed
+automatically. To run the helper's offline regression tests from the checkout:
+`python3 -B -m unittest discover -s scripts -p 'test_notify_unread_omarchy.py'`.
+
 ## Published images (no checkout)
 
 Pull Postgres and `ghcr.io/elie222/rakazo/app` into any empty folder. No clone or image build.
